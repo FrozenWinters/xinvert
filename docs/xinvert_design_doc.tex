@@ -1,0 +1,122 @@
+\documentclass{amsart}
+\usepackage{amsmath}
+\usepackage{upgreek}
+\usepackage{amssymb}
+\usepackage{graphicx}
+
+\usepackage{enumerate}
+\usepackage[utf8]{inputenc}
+
+\usepackage{tikz}
+\usepackage{hyperref}
+
+\setlength{\textwidth}{6.37in}
+\setlength{\marginparwidth}{0pt}
+\setlength{\evensidemargin}{0in}
+\setlength{\oddsidemargin}{0in}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{conj}[theorem]{Conjecture}
+
+\usepackage{titling}
+\setlength{\droptitle}{-8em}
+
+\title{Vectorised 5$\times$5 Matrix Inversion \vspace{-0.65cm}}
+\date{Taras Kolomatski}
+
+\begin{document}
+
+\maketitle
+
+\section*{Choosing an Algorithm}
+
+I needed an inversion algorithm that was vectorisable. The instructions that I would run were to be the same for each matrix in my collection, and in particular had to avoid branching (for as long as possible, at least, there being a separate case of singular matrices).
+
+First, I went to the Wikipedia page for matrix inversion, and having read that, I considered the following algorithms:
+
+\begin{enumerate}
+    \item \texttt{Gaussian Elimination}: What you're taught in a first linear algebra course, unless the instructor uses an approach in the style of Axler. Unless you re-order the rows, this is not numerically stable (indeed without branching matrices with many zero entries would give a divide by zero error). So neither is this vectorisable, nor does it lend itself to detection of degeneracy.
+    \item \texttt{Factorisation}: LU or others. What you're probably taught in a second linear algebra course. This is the way to go for large matrices. I think that branching is necessary to implement this and I suspected that there was a way to save overhead apart from this in the 5$\times$5 case.
+    \item \texttt{Series approximation}: Won't give exact results in nice situations and it could be the case that I write this and subsequently realise that I would want to go an order that makes this inefficient.
+    \item \texttt{Cayley-Hamilton}: Most theoretically rich approach, but I would need to find the sums products of the eigenvalues taken $k$ at a time\ldots \textit{Apparently Bell functions do this. Initial reaction: Sorcery!} Then I read about and worked on this combinatorial problem for personal interest. In the 5$\times$5 case you would only need the traces of the first four powers of each matrix, although taking the fifth power gives an immediate way to find the determinant, which we would otherwise do manually. This approach quickly becomes less desirable for larger dimensions, and hence taking it is a bold move. Obviously this.
+\end{enumerate}
+
+\section*{The Cayley-Hamilton Approach}
+
+Consider a $n \times n $ matrix $A$. Let $\lambda_1, \ldots, \lambda_n \in \mathbb{C}$ denote its eigenvalues. Its characteristic polynomial is:
+\[p=\prod_{j=1}^n(x - \lambda_j).\]
+This is a monic polynomial. If we expand the product, then we get:
+\[p=x^n + c_1 x^{n-1} + \ldots c_{n-1}x + c_n,\]
+where, by Vieta,
+\[c_k = (-1)^k\sum_{\substack{S \subset [n]\\|S| = k}} \left( \prod_{j \in S} \lambda_{j} \right),\]
+that is, the sum of products of the eigenvalues taken $k$ at a time.
+
+The Cayley-Hamilton theorem states that an operator satisfies its characteristic polynomial. In this case,
+\[p(A)= A^n + c_1 A^{n-1} + \ldots + c_n I = 0.\]
+Knowing this, we can rearrange:
+\[-c_n I = A \left(A^{n-1} + c_1 A^{n-2} + \ldots + c_{n-1} I \right).\]
+Note that $c_n = (-1)^n\text{det}A$. Hence, exactly when $A$ is non-singular, we obtain:
+\[A^{-1} = \frac{-1}{c_n}\left(A^{n-1} + c_1 A^{n-2} + \ldots + c_{n-1} I \right).\]
+
+
+Note that $c_1 = -\text{Tr}A$. Let
+\[s_k = \text{Tr}A^k = \sum_{j = 1}^n \lambda_j^k.\]
+It is an amazing combinatorial fact that we can derive $c_k$ given $s_j$ for $j \leq k$. This lets us compute the characteristic polynomial of $A$ without computing its eigenvalues! The identity is:
+\[c_k = \frac{(-1)^k}{k!}B_k\left(s_1, -1!\ s_2, \ldots, (-1)^{k-1} k!\ s_k\right),\]
+where $B_k$ it the $k$-th complete Bell polynomial. These can be defined recursively with the following identities:
+\[B_0 = 1\]
+\[B_{k+1}(x_1\ldots, x_{k+1}) = \sum_{j=0}^k \binom{k}{j} B_{k-j}(x_1, \ldots, x_{k-j}) x_{j+1}.\]
+For specific cases, here $5 \times 5$, we can just hard code this computation up to the pertinent $B_k$.
+
+\vspace{0.5cm}
+
+Our algorithm is as follows. Always let $1 \leq j \leq 5$.
+\begin{enumerate}[i]
+    \item \textit{Compute the $A^j$.} (\texttt{mmult})
+    \item \textit{Take the traces to yield the $s_j$.}  (\texttt{mtrace})
+    \item \textit{Multiply by constants to get the arguments of the Bell polynomials: $s_1, -s_2, 2s_3, -6s_4, 24s_5$.}
+    \item \textit{Use these to compute the values of $B_j$ for $0 \leq j \leq 5$ via the recursive definition.} (\texttt{Bell5})
+    \item \textit{Multiply by constants to get the $c_n$.}
+    \item \textit{Compute:}
+    \[\left(A^{4} + c_1 A^{3} + c_2 A^{2} + c_3 A + c_4 I \right).\]
+    \item \textit{If $c_5 \nsim 0$, multiply by $-\frac{1}{c_5}$. Otherwise multiply by 0.}
+    \item \textit{Return the result.}
+\end{enumerate}
+
+Note that, apart from choosing which multiple to use at the end, this algorithm involves no branching and is thus suitable to vectorisation.
+
+\section*{Implementation}
+
+I skimmed the \texttt{xtensor} docs prior to starting. However, I first implemented a non-polished library-free implementation. (This can be found in the \texttt{cinvert.cpp} file.) This meant that I would have to implement functionality that would be otherwise provided, such as a pretty-print function for my matrices, which helped me debug the code. This was a correct choice as I went into struggling with \texttt{xtensor} while being sure of my algorithm.
+
+I found \texttt{xtensor} to be poorly documented and struggled with learning the library. There were several typos when listing namespaces, for example, on the \textit{Arrays and Tensors} tutorial page, the following appears: \texttt{xt::layout::row\_major}. The type \texttt{xtensorf}, which was recently introduced, is essentially undocumented (it's only mentioned in a tutorial page). While this was stated to be non-realisable, it was not reasonable to conclude from the description that it did not support a dynamic layout, and hence that it was incompatible with, for example taking a transpose, which I tried to do with other features in \texttt{view}. Further, there is no explanation of vectorising arbitrary scalar functions. Eventually, I read through the most of the docs and came to an understanding of most of the library.
+
+Roughly, I found \textit{purely vectorisable} functionality to work very well, but could not get accumulation with user functions or imperative expression building to work in the way that I'm used to in functional languages (a large part of this difficulty arose from type matters and runtime errors). As a result, I have an absolutely beautiful implementation of naive matrix multiplication using the broadcasting rules (see my pdf with a drawing explaining how this works), but an inelegant inversion algorithm body (I am well aware of the way this function ought to be structured). I was not able to successfully vectorise my code, but I expect that somebody with better knowledge of \texttt{xtensor} would be able to adapt my code with little alteration (plus it's really not something to which I should be allocating time at the point of this application).
+
+My implementation is primarily contained in the \texttt{xinvert.cpp} sourse file. It's header provides the following typedefs:
+\begin{itemize}
+    \item \texttt{reals}: the scalars on which our tensors are built, here \texttt{long double}.
+    \item \texttt{x\_lst}: a 1-D \texttt{xtensor} of \texttt{reals}.
+    \item \texttt{x\_mat}: a 2-D \texttt{xtensor} of \texttt{reals}.
+\end{itemize}
+And the following functions:
+
+\begin{itemize}
+    \item \texttt{xinvert5}: Takes a \texttt{x\_mat} by const reference, assumed be $5 \times 5$, and returns a \texttt{x\_mat} which is either the inverse or zero if the argument is a singular matrix.
+    \item \texttt{mprod}: Returns the product (a \texttt{x\_mat}) of two arbitrary \texttt{x\_mat} arguemnts passed by const reference, provided that they have compatible sizes.
+    \item \texttt{mtrace}: Returns a \texttt{reals} that is the trace of a square \texttt{x\_mat} arguemnt passed by const reference.
+    \item \texttt{clearepsilons}: Takes a reference to a \texttt{x\_mat} and mutates it by setting near zero entries to zero.
+\end{itemize}
+If the stated size assumptions are not met, then this should raise a runtime error.
+
+\section*{Testing}
+
+The body of \texttt{main.cpp} uses \texttt{xtensor}'s random capabilities to a generate a random $5 \times 5$ matrix $A$ with entries randomly sampled between a specified range. We compute $A^{-1}$ and $AA^{-1}$. I wrote \texttt{clearepsilons} in order to make the final output to not be filled with entries absolutely smaller than $10^{-15}$. Thus this final output should be either the identity matrix, or zero if $A$ is singular. Apart from this, I tested my code at each point in the development process, but am not providing a test suite with this submission, although I have several commented off cases.
+
+The inversion gives results accurate to our specified epsilon when entries are randomly selected between $\pm 10^{10}$, which is very good was not initially expected as I compute the fifth power of $A$. The size of \texttt{long double} is system dependant, so milage may vary.
+
+\section*{Running the Project}
+
+I have provided a Makefile that produces the executable \texttt{invert} in the parent directory of the project. Run \texttt{make} to build and \texttt{make clean} to remove the built files.
+
+\end{document}
